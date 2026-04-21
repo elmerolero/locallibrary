@@ -1,8 +1,13 @@
-from django.shortcuts import render
+from django.shortcuts import render, get_object_or_404
 from django.views import generic
-from .models import Book, BookInstance, Author, Genre
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.mixins import PermissionRequiredMixin
+from django.http import HttpResponseRedirect
+from django.urls import reverse
+from django.contrib.auth.decorators import login_required, permission_required
+from .models import Book, BookInstance, Author, Genre
+from catalog.forms import RenewBookModelForm
+import datetime
 
 # Create your views here.
 def index(request):
@@ -96,3 +101,64 @@ class LoanedBooksListView(PermissionRequiredMixin, generic.ListView):
         return (
             BookInstance.objects.all().order_by('due_back')
         )
+
+@login_required
+@permission_required('catalog.can_mark_returned', raise_exception=True)
+def renew_book_librarian(request, pk):
+    book_instance = get_object_or_404(BookInstance, pk=pk)
+
+    # If this is a POST request then process the Form data
+    if request.method == 'POST':
+        # Create a form instance and populate it with data from the request (binding)
+        form = RenewBookModelForm(request.POST)
+
+        # Checks if the form is valid
+        if form.is_valid():
+            # Process the data in form.cleaned_data as required (here we just write it to the model due_back field)
+            book_instance.due_back = form.cleaned_data['due_back']
+            book_instance.save()
+        
+            # redirect to a new URL:
+            return HttpResponseRedirect(reverse('borrowed'))
+
+    #If this is a GET (or any other method) create the default form
+    else:
+        proposed_renewal_date = datetime.date.today() + datetime.timedelta(weeks=3)
+        form = RenewBookModelForm(initial={'due_back': proposed_renewal_date})
+
+    context = {
+        'form': form,
+        'book_instance': book_instance
+    }
+
+    return render(request, 'catalog/book_renew_librarian.html', context)
+
+from django.views.generic.edit import CreateView, UpdateView, DeleteView
+from django.urls import reverse_lazy
+from .models import Author
+
+class AuthorCreate(PermissionRequiredMixin, CreateView):
+    model = Author
+    fields = ['first_name', 'last_name', 'date_of_birth', 'date_of_death']
+    initial = {'date_of_death': '11/11/2023'}
+    permission_required = 'catalog.add_author'
+
+class AuthorUpdate(PermissionRequiredMixin, UpdateView):
+    model = Author
+    # Not recommentded (potential security issue if more fields added)
+    fields = '__all__'
+    permission_required = 'catalog.change_author'
+
+class AuthorDelete(PermissionRequiredMixin, DeleteView):
+    model = Author
+    success_url = reverse_lazy('authors')
+    permission_required = 'catalog.delete_author'
+
+    def form_valid(self, form):
+        try:
+            self.object.delete()
+            return HttpResponseRedirect(self.success_url)
+        except Exception as e:
+            return HttpResponseRedirect(
+                reverse("author-delete", kwargs={"pk": self.object.pk})
+            )
